@@ -1,0 +1,7 @@
+.tern
+.classpath
+.project
+.settings/
+target/
+.tern-project
+.factorypath

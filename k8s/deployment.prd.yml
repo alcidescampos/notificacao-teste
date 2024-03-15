@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: gizmo-backend-web
+    projeto: gizmo-backend
+  name: gizmo-backend-web
+  namespace: ia-sinapses-prd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gizmo-backend-web
+      projeto: gizmo-backend
+  template:
+    metadata:
+      labels:
+        app: gizmo-backend-web
+        projeto: gizmo-backend
+    spec:
+      containers:
+      - image: #CONTAINER_IMG
+        imagePullPolicy: Always
+        name: gizmo-backend-web
+        resources: 
+          requests:
+            memory: 8Gi
+            cpu: 1
+          limits:
+            memory: 8Gi
+            cpu: 1
+        env:
+        - name: JAVA_OPTS
+          value: '-Xmx7168m'
+        - name: TZ
+          value: 'America/Sao_Paulo'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: configs
+          mountPath: '/opt/app/config/application.properties'
+          subPath: application.properties
+          readOnly: true
+      imagePullSecrets:
+      - name: cnj-registro
+      volumes:
+      - name: configs
+        configMap:
+          name: gizmo
+          items:
+          - key: application.properties
+            path: application.properties
+            
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: gizmo-backend-jobs
+    projeto: gizmo-backend
+  name: gizmo-backend-jobs
+  namespace: ia-sinapses-prd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gizmo-backend-jobs
+      projeto: gizmo-backend
+  template:
+    metadata:
+      labels:
+        app: gizmo-backend-jobs
+        projeto: gizmo-backend
+    spec:
+      containers:
+      - image: #CONTAINER_IMG
+        imagePullPolicy: Always
+        name: gizmo-backend-jobs
+        resources: 
+          requests:
+            memory: 8Gi
+            cpu: 1
+          limits:
+            memory: 8Gi
+            cpu: 1
+        env:
+        - name: JAVA_OPTS
+          value: '-Xmx7168m'
+        - name: TZ
+          value: 'America/Sao_Paulo'
+        - name: APP_OPTS
+          value: '-Daplicacao.scheduler.habilitado=true'
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: configs
+          mountPath: '/opt/app/config/application.properties'
+          subPath: application.properties
+          readOnly: true
+      imagePullSecrets:
+      - name: cnj-registro
+      volumes:
+      - name: configs
+        configMap:
+          name: gizmo
+          items:
+          - key: application.properties
+            path: application.properties            
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gizmo-backend
+  namespace: ia-sinapses-prd
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: gizmo-backend-web

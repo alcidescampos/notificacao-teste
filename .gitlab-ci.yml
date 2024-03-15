@@ -1,0 +1,150 @@
+image: registry.cnj.jus.br/ia/docker/ubuntu-ia/oracle-jdk/buildah:latest
+
+stages:
+  - testes
+  - versionamento
+  - compilacao
+  - registro
+  - release
+  - metricas
+  - publicacao
+
+variables:
+  MAVEN_CLI_OPTS: "-Dmaven.repo.local=/cache/maven.repository --batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true -DdeployAtEnd=true"
+  REGISTRO_NOME: $DOCKER_REGISTRO_URL/${CI_PROJECT_PATH}
+
+before_script:
+  - echo $REGISTRO_NOME
+  - echo $MAVEN_CLI_OPTS
+  - mkdir -p $HOME/.m2
+  - echo "$MVN_SETTINGS" > $HOME/.m2/settings.xml
+  - if [[ ! -e VERSAO.txt ]]; then echo $CI_PIPELINE_ID > VERSAO.txt; fi
+
+teste-unitario:
+  stage: testes
+  script:
+    - mvn $MAVEN_CLI_OPTS test
+  only:
+    - branches
+  except:
+    - alpha
+    - master
+
+teste-integracao:
+  stage: testes
+  script:
+    - mvn $MAVEN_CLI_OPTS clean test-compile failsafe:integration-test failsafe:verify
+  allow_failure: true
+  only:
+    - branches
+  except:
+    - alpha
+    - master
+
+validacoes:
+  image: registry.cnj.jus.br/ia/docker/validador:latest
+  stage: testes
+  script:
+    - validar
+  only:
+    - branches
+  except:
+    - alpha
+    - master
+
+versionamento:
+  image: registry.cnj.jus.br/ia/docker/semantic-release:latest
+  stage: versionamento
+  before_script:
+    - npm config set registry $NPM_REGISTRO_URL
+  script:
+    - npx semantic-release --generate-notes false --dry-run
+  only:
+    - alpha
+    - master
+  artifacts:
+    paths:
+      - VERSAO.txt
+    expire_in: 1 day
+
+compilacao:
+  stage: compilacao
+  script:
+    - DATA_COMPILACAO=$(date '+%d/%m/%Y %H:%M:%S')
+    - mvn $MAVEN_CLI_OPTS -Pdocker -Dapp.versao=$(cat VERSAO.txt) -Dapp.commit-sha=$CI_COMMIT_SHA -Dapp.pipeline-id=$CI_PIPELINE_ID -Dapp.data-compilacao="$DATA_COMPILACAO" package -DskipTests
+  artifacts:
+    paths:
+      - target/quarkus-app/
+    expire_in: 1 day
+  only:
+    - alpha
+    - master
+
+registro:
+  image: registry.cnj.jus.br/buildah/stable
+  stage: registro
+  script:
+    - mkdir -p $HOME/.docker/
+    - echo $DOCKER_REGISTRO_CONFIG > $HOME/.docker/config.json
+    - buildah bud -t $REGISTRO_NOME:${CI_PIPELINE_ID} -t $REGISTRO_NOME:$(cat VERSAO.txt) .
+    - buildah push --compression-format=zstd --compression-level=3 --format=oci $REGISTRO_NOME:${CI_PIPELINE_ID}
+    - buildah push --compression-format=zstd --compression-level=3 --format=oci $REGISTRO_NOME:$(cat VERSAO.txt)
+  only:
+    - alpha
+    - master
+
+release:
+  image: registry.cnj.jus.br/ia/docker/semantic-release:latest
+  stage: release
+  before_script:
+    - npm config set registry $NPM_REGISTRO_URL
+  script:
+    - npx semantic-release
+  only:
+    - alpha
+    - master
+
+sonar:
+  stage: metricas
+  script:
+    - mvn $MAVEN_CLI_OPTS clean test sonar:sonar -Dsonar.host.url=$SONAR_URL -Dsonar.login=$SONAR_LOGIN -Dmaven.test.failure.ignore=false
+  allow_failure: true
+  only:
+    - alpha
+
+publicacao-desenvolvimento:
+  stage: publicacao
+  image: registry.cnj.jus.br/devops/kubectl-alpine
+  script:
+    - echo "$KUBE_CONFIG_EKS_DEV" > $HOME/.kube/config
+    - sed -i s,#CONTAINER_IMG,$REGISTRO_NOME:$(cat VERSAO.txt),g k8s/deployment.dev.yml
+    - cat k8s/deployment.dev.yml
+    - kubectl -n ia-sinapses-dev apply -f k8s/deployment.dev.yml
+  only:
+    - alpha
+    - master
+
+publicacao-homologacao:
+  stage: publicacao
+  image: registry.cnj.jus.br/devops/kubectl-alpine
+  script:
+    - echo "$KUBE_CONFIG_EKS_DEV" > $HOME/.kube/config
+    - sed -i s,#CONTAINER_IMG,$REGISTRO_NOME:$(cat VERSAO.txt),g k8s/deployment.hml.yml
+    - cat k8s/deployment.hml.yml
+    - kubectl -n ia-sinapses-hml apply -f k8s/deployment.hml.yml
+  when: manual
+  only:
+    - alpha
+    - master
+
+publicacao-producao:
+  stage: publicacao
+  image: registry.cnj.jus.br/devops/kubectl-alpine
+  script:
+    - echo "$KUBE_CONFIG_EKS_PRD" > $HOME/.kube/config
+    - sed -i s,#CONTAINER_IMG,$REGISTRO_NOME:$(cat VERSAO.txt),g k8s/deployment.prd.yml
+    - cat k8s/deployment.prd.yml
+    - kubectl -n ia-sinapses-prd apply -f k8s/deployment.prd.yml
+  when: manual
+  only:
+    - master
